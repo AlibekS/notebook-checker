@@ -20,7 +20,7 @@
 
 ## Сборка в один exe
 
-На машине с Windows 10/11 x64 и Python 3.11+ запустите `build.bat` либо выполните вручную:
+На машине с Windows 10/11 x64 и Python 3.11+ запустите `build.bat` (он сам найдёт Python через `py` или `python`) либо выполните вручную — если команда `python` у вас не работает, замените её на `py`:
 
 ```bat
 python -m pip install -r requirements.txt
