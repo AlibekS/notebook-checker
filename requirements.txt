@@ -1,0 +1,6 @@
+# Зависимости LaptopCheck (Python 3.11+, Windows 10/11 x64)
+opencv-python>=4.8      # веб-камера
+numpy>=1.26             # обработка звука и кадров
+sounddevice>=0.4.6      # динамики и микрофон (PortAudio входит в пакет для Windows)
+psutil>=5.9             # статус питания / батареи
+pyinstaller>=6.3        # сборка в один .exe (нужен только на машине сборки)
