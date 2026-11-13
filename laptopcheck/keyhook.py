@@ -79,6 +79,8 @@ class KeyboardHook:
         self._thread_id = 0
         self._ready = threading.Event()
         self.block = True       # глушить ли нажатия для системы
+        self.paused = False     # временно пропускать всё мимо (ввод комментария)
+        self._swallowed: set[int] = set()  # клавиши, чьё нажатие мы заглушили
         self.active = False     # установлен ли хук
         self.error = ""
 
@@ -89,6 +91,7 @@ class KeyboardHook:
         if self._thread and self._thread.is_alive():
             return True
         self._ready.clear()
+        self._swallowed.clear()
         self._thread = threading.Thread(target=self._run, daemon=True, name="keyboard-hook")
         self._thread.start()
         self._ready.wait(3.0)
@@ -105,17 +108,25 @@ class KeyboardHook:
         self._thread_id = _kernel32.GetCurrentThreadId()
 
         def proc(n_code, w_param, l_param):
-            if n_code == 0:  # HC_ACTION
+            if n_code == 0 and not self.paused:  # HC_ACTION
                 try:
                     info = ctypes.cast(l_param, ctypes.POINTER(KBDLLHOOKSTRUCT)).contents
+                    vk = info.vkCode
                     is_down = w_param in (WM_KEYDOWN, WM_SYSKEYDOWN)
                     foreground = _our_window_is_foreground()
                     if foreground:
-                        self._callback(info.vkCode, info.scanCode,
-                                       bool(info.flags & LLKHF_EXTENDED), is_down)
+                        self._callback(vk, info.scanCode, bool(info.flags & LLKHF_EXTENDED), is_down)
                     # Глушим клавиши только пока активно наше окно, чтобы
                     # не «убить» клавиатуру для остальных программ.
-                    if self.block and foreground:
+                    if is_down:
+                        if self.block and foreground:
+                            self._swallowed.add(vk)
+                            return 1
+                    elif vk in self._swallowed:
+                        # Отпускание глушим только в паре с заглушённым нажатием. Иначе Windows
+                        # считала бы клавишу, нажатую до включения хука, зажатой навсегда,
+                        # и детектор залипания давал бы ложные срабатывания.
+                        self._swallowed.discard(vk)
                         return 1
                 except Exception:
                     pass  # исключение в хуке не должно блокировать клавиатуру

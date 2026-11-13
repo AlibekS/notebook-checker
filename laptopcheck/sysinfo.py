@@ -45,7 +45,7 @@ $mem  = @(Get-CimInstance Win32_PhysicalMemory | ForEach-Object { [int64]$_.Capa
     os_caption   = "$($os.Caption)".Trim()
     os_version   = "$($os.Version)"
     hostname     = $env:COMPUTERNAME
-} | ConvertTo-Json -Depth 4 -Compress
+} | Out-J
 """,
     # ---- 2. Аккумулятор -----------------------------------------------------
     "battery": _PS_WMI_HELPER + r"""
@@ -63,7 +63,7 @@ $st     = Get-Wmi2 'root\wmi' 'BatteryStatus'
     cycles         = $cyc[0].CycleCount
     ac_online      = $st[0].PowerOnline
     charging       = $st[0].Charging
-} | ConvertTo-Json -Depth 4 -Compress
+} | Out-J
 """,
     # ---- 3. Накопители ------------------------------------------------------
     "disks": r"""
@@ -92,7 +92,7 @@ $disks = @(Get-PhysicalDisk | Where-Object { "$($_.BusType)" -ne 'USB' } | ForEa
         read_errors     = $rc.ReadErrorsUncorrected
     }
 })
-@{ disks = $disks } | ConvertTo-Json -Depth 5 -Compress
+@{ disks = $disks } | Out-J
 """,
     # ---- 4. Диспетчер устройств --------------------------------------------
     "devices": r"""
@@ -104,7 +104,7 @@ $dev = @(Get-CimInstance Win32_PnPEntity -Filter "ConfigManagerErrorCode <> 0" |
         id    = "$($_.DeviceID)"
     }
 })
-@{ devices = $dev } | ConvertTo-Json -Depth 5 -Compress
+@{ devices = $dev } | Out-J
 """,
     # ---- 5. Безопасность и ОС ----------------------------------------------
     "security": r"""
@@ -142,7 +142,7 @@ $admin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdenti
     workplace_joined = [bool]($ds -match 'WorkplaceJoined\s*:\s*YES')
     tenant           = $tenant
     is_admin         = [bool]$admin
-} | ConvertTo-Json -Depth 5 -Compress
+} | Out-J
 """,
 }
 
@@ -179,6 +179,9 @@ DEVICE_ERROR_CODES = {
     48: "драйвер заблокирован",
     52: "цифровая подпись драйвера не проверена",
 }
+
+_JUNK_SERIALS = {"to be filled by o.e.m.", "default string", "system serial number", "none", "n/a",
+                 "not specified", "not applicable", "invalid", "chassis serial number", "123456789"}
 
 LICENSE_STATUS = {
     0: "Не активирована",
@@ -253,10 +256,16 @@ def _rows_identity(d: dict) -> list[Row]:
     if d.get("cpu_cores"):
         cpu += f" — {d['cpu_cores']} ядер / {d.get('cpu_threads') or '?'} потоков"
     serial = d.get("serial") or ""
+    # На платах после замены/перепрошивки в поле серийного номера бывает заглушка
+    junk = serial.strip().lower() in _JUNK_SERIALS or not serial.strip("0 ")
+    if junk and serial:
+        serial_row = ("Серийный номер (BIOS)", f"{serial} — похоже на заглушку, сверьте с наклейкой", "warn")
+    else:
+        serial_row = ("Серийный номер (BIOS)", _val(serial), "" if serial else "warn")
     return [
         ("Производитель", _val(d.get("manufacturer")), ""),
         ("Модель", model, ""),
-        ("Серийный номер (BIOS)", _val(serial), "" if serial else "warn"),
+        serial_row,
         ("Версия BIOS", _val(d.get("bios_version")), ""),
         ("Процессор", cpu, ""),
         ("Оперативная память", ram_text, ""),
@@ -323,7 +332,7 @@ def _rows_disks(d: dict) -> list[Row]:
         if disk.get("power_on_hours"):
             rows.append((prefix + "Наработка", f"{disk['power_on_hours']} ч", ""))
         if disk.get("read_errors"):
-            rows.append((prefix + "Неисправимые ошибки чтения", str(disk["read_errors"]), "bad"))
+            rows.append((prefix + "Неисправимые ошибки чтения", str(disk["read_errors"]), "warn"))
     return rows
 
 

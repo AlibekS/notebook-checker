@@ -121,7 +121,11 @@ class AudioStep(Step):
             stereo[:, 0 if side == "left" else 1] = tone
             self.sd.play(stereo, RATE)
             self.played[side] = True
-            self.spk_info.configure(text="Играет ЛЕВЫЙ канал" if side == "left" else "Играет ПРАВЫЙ канал")
+            self.spk_info.configure(text="▶ Играет ЛЕВЫЙ канал" if side == "left" else "▶ Играет ПРАВЫЙ канал")
+            self._tone_id = getattr(self, "_tone_id", 0) + 1
+            tone_id = self._tone_id
+            # Через 1,6 с убираем надпись (если за это время не запустили другой канал)
+            self.later(1600, lambda: self.spk_info.configure(text="") if tone_id == self._tone_id else None)
         except Exception as exc:
             self.spk_info.configure(text=f"Ошибка воспроизведения: {exc}")
 

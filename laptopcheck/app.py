@@ -53,7 +53,8 @@ class App(tk.Tk):
         right.pack(side="left", fill="both", expand=True)
         self.actions = ttk.Frame(right, padding=(18, 10))
         self.actions.pack(side="bottom", fill="x")
-        ttk.Separator(right).pack(side="bottom", fill="x")
+        self._actions_sep = ttk.Separator(right)
+        self._actions_sep.pack(side="bottom", fill="x")
         self.container = ttk.Frame(right)
         self.container.pack(side="top", fill="both", expand=True)
         self._build_actions()
@@ -116,7 +117,8 @@ class App(tk.Tk):
         bar = self.actions
         ttk.Label(bar, text="Комментарий:").pack(side="left")
         self.comment_var = tk.StringVar()
-        ttk.Entry(bar, textvariable=self.comment_var).pack(side="left", fill="x", expand=True, padx=8)
+        self.comment_entry = ttk.Entry(bar, textvariable=self.comment_var)
+        self.comment_entry.pack(side="left", fill="x", expand=True, padx=8)
         # takefocus=False: во время теста клавиатуры Пробел/Enter не должны «нажимать» кнопки
         self.btn_ok = tk.Button(bar, text="✔ Подтвердить (ОК)", bg="#1f9d55", fg="#ffffff", relief="flat",
                                 activebackground="#178a49", activeforeground="#ffffff", font=self.font_bold,
@@ -146,7 +148,9 @@ class App(tk.Tk):
         self.update_idletasks()
         self.comment_var.set(self.results[step.step_id]["comment"])
         if step.show_actions:
-            self.actions.pack(side="bottom", fill="x")
+            # before=…: панель должна остаться первой в порядке упаковки, иначе при возврате
+            # с последнего этапа она окажется под разделителем и может не поместиться в окно
+            self.actions.pack(side="bottom", fill="x", before=self._actions_sep)
         else:
             self.actions.pack_forget()
         self._refresh_sidebar()
@@ -193,6 +197,10 @@ class App(tk.Tk):
                 widget.configure(bg=bg)
             row["icon"].configure(text=STATUS_ICONS[status], fg=STATUS_COLORS[status])
             row["status"].configure(text=STATUS_LABELS[status], fg=STATUS_COLORS[status])
+
+    def passport_busy(self) -> bool:
+        """True, пока PowerShell ещё собирает паспорт устройства."""
+        return any(getattr(s, "_pending", 0) for s in self.steps)
 
     def pending_titles(self) -> list[str]:
         return [s.title for s in self.steps

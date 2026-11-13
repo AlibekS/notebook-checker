@@ -70,6 +70,19 @@ _VK_NAMES = {0x5C: "Правый Win", 0xAD: "Mute", 0xAE: "Volume−", 0xAF: "V
              0xB2: "Stop", 0xB3: "Play/Pause", 0x5F: "Sleep", 0xA6: "Browser Back", 0xA7: "Browser Forward"}
 
 
+# Понятные названия для клавиш с одинаковыми подписями (в акте: «Не нажаты: Правый Ctrl, Num 5»)
+_SIDE_NAMES = {0xA0: "Левый Shift", 0xA1: "Правый Shift", 0xA2: "Левый Ctrl", 0xA3: "Правый Ctrl",
+               0xA4: "Левый Alt", 0xA5: "Правый Alt", "NUMENTER": "Num Enter"}
+
+
+def key_name(key_id, label: str) -> str:
+    if key_id in _SIDE_NAMES:
+        return _SIDE_NAMES[key_id]
+    if isinstance(key_id, int) and (0x60 <= key_id <= 0x6F or key_id == 0x90) and label != "Num":
+        return f"Num {label}"
+    return label
+
+
 def normalize_key(vk: int, extended: bool):
     """Приводит событие хука к идентификатору клавиши раскладки."""
     if vk == 0x0D and extended:
@@ -83,13 +96,15 @@ class KeyboardStep(Step):
     step_id = "keyboard"
     title = "Клавиатура и тачпад"
     hint = ("Нажмите по очереди каждую клавишу — она станет зелёной. Системные сочетания (Win, Alt+Tab, "
-            "PrintScreen) на время теста перехватываются. Клавиша Fn не посылает код в ОС — её проверяют "
-            "в сочетаниях (Fn+F-клавиши: яркость, громкость). Кнопки внизу нажимайте мышью.")
+            "PrintScreen) на время теста перехватываются. Клавиши, которых на этом ноутбуке нет, отметьте "
+            "правым кликом по схеме. Клавиша Fn не посылает код в ОС — её проверяют в сочетаниях "
+            "(Fn+F-клавиши). Чтобы ввести комментарий, кликните в поле «Комментарий» — перехват приостановится.")
 
     COLOR_IDLE, COLOR_DONE, COLOR_DOWN, COLOR_STUCK, COLOR_NA = "#f4f6f9", "#4cc27a", "#f2c94c", "#e06464", "#d7dbe2"
 
     def build(self, body):
         self.pressed: set = set()        # клавиши, нажатые хотя бы раз
+        self.absent: set = set()         # клавиши, которых физически нет на этом ноутбуке (ПКМ по схеме)
         self.down_now: set = set()       # удерживаемые в данный момент
         self.stuck: list[str] = []       # подписи залипших клавиш
         self.other_keys: set[str] = set()  # нажатые клавиши вне схемы (мультимедиа и т. п.)
@@ -98,6 +113,7 @@ class KeyboardStep(Step):
         self._hook = KeyboardHook(lambda vk, scan, ext, down: self._events.put((vk, ext, down)))
         self._stuck_samples: list[set[int]] = []
         self._items: dict = {}           # id клавиши -> id прямоугольника на canvas
+        self._texts: dict = {}           # id клавиши -> id подписи на canvas
         self._stuck_ids: set[int] = set()
         self._last = None                # последняя нажатая клавиша
 
@@ -122,6 +138,8 @@ class KeyboardStep(Step):
                                 highlightbackground="#c9d0db")
         self.canvas.pack(fill="x", pady=(4, 8))
         self.canvas.bind("<Configure>", lambda e: self._redraw())
+        # Клик по схеме или зоне тачпада забирает фокус из поля комментария -> перехват возобновляется
+        self.canvas.bind("<Button-1>", lambda e: self.canvas.focus_set())
 
         # --- Тачпад -----------------------------------------------------
         tp = ttk.Frame(body)
@@ -132,7 +150,7 @@ class KeyboardStep(Step):
         self.pad_text = self.pad.create_text(12, 12, anchor="nw", fill="#4a5568", font=self.app.font_normal,
                                              text="Зона проверки тачпада:\nлевый клик, правый клик, двойной клик, "
                                                   "прокрутка двумя пальцами")
-        self.pad.bind("<Button-1>", lambda e: self._touch("left"))
+        self.pad.bind("<Button-1>", lambda e: (self.pad.focus_set(), self._touch("left")))
         self.pad.bind("<Button-3>", lambda e: self._touch("right"))
         self.pad.bind("<Double-Button-1>", lambda e: self._touch("double"))
         self.pad.bind("<MouseWheel>", lambda e: self._touch("scroll"))
@@ -147,12 +165,18 @@ class KeyboardStep(Step):
             lbl.pack(anchor="w", pady=2)
             self.touch_labels[key] = (lbl, text)
 
+
     # --- жизненный цикл ---------------------------------------------------
     def on_show(self):
         self._redraw()
         if not IS_WINDOWS:
             self.info.configure(text="Перехват клавиатуры доступен только в Windows")
             return
+        # Пока курсор в поле комментария, хук ничего не перехватывает — иначе дефект было бы не описать
+        entry = self.app.comment_entry
+        self._bindings = [(entry, "<FocusIn>", entry.bind("<FocusIn>", lambda e: self._set_paused(True), add="+")),
+                          (entry, "<FocusOut>", entry.bind("<FocusOut>", lambda e: self._set_paused(False), add="+"))]
+        self._hook.paused = False
         # Сначала 2 секунды слушаем залипшие клавиши. Хук включаем ПОСЛЕ проверки:
         # заблокированные хуком нажатия не видны через GetAsyncKeyState.
         self._stuck_samples = []
@@ -163,6 +187,17 @@ class KeyboardStep(Step):
         self.cancel_timers()
         self._hook.stop()
         self.down_now.clear()
+        for widget, sequence, func_id in getattr(self, "_bindings", ()):
+            try:
+                widget.unbind(sequence, func_id)
+            except tk.TclError:
+                pass
+        self._bindings = []
+
+    def _set_paused(self, paused: bool):
+        self._hook.paused = paused
+        self.down_now.clear()
+        self._redraw()
 
     def _sample_stuck(self):
         self._stuck_samples.append(pressed_keys())
@@ -175,7 +210,7 @@ class KeyboardStep(Step):
             for vk in sample:
                 counts[vk] = counts.get(vk, 0) + 1
         stuck_vks = [vk for vk, n in counts.items() if n >= 16]
-        labels = {key_id: label for label, key_id, *_ in build_layout(True, True)}
+        labels = {key_id: key_name(key_id, label) for label, key_id, *_ in build_layout(True, True)}
         self.stuck = [str(labels.get(vk) or _VK_NAMES.get(vk) or f"VK 0x{vk:02X}") for vk in stuck_vks]
         self._stuck_ids = set(stuck_vks)
         if self.stuck:
@@ -202,12 +237,15 @@ class KeyboardStep(Step):
                 if vk == 0xFF:
                     continue
                 key = normalize_key(vk, ext)
+                # Отмечаем и по нажатию, и по отпусканию: некоторые клавиши (PrintScreen)
+                # на части систем присылают только отпускание.
+                self.pressed.add(key)
+                self.absent.discard(key)   # клавиша сработала — значит, она всё-таки есть
+                self._last = key
+                if key not in self._items:
+                    self.other_keys.add(_VK_NAMES.get(vk, f"VK 0x{vk:02X}"))
                 if down:
                     self.down_now.add(key)
-                    self.pressed.add(key)
-                    if key not in self._items:
-                        self.other_keys.add(_VK_NAMES.get(vk, f"VK 0x{vk:02X}"))
-                    self._last = key
                 else:
                     self.down_now.discard(key)
                 self._paint(key)
@@ -237,9 +275,13 @@ class KeyboardStep(Step):
             x0, y0 = ox + x * unit + 2, 8 + y * unit + 2
             rect = c.create_rectangle(x0, y0, x0 + w * unit - 4, y0 + h * unit - 4,
                                       fill=self.COLOR_NA if key_id is None else self.COLOR_IDLE, outline="#9aa5b5")
-            c.create_text(x0 + (w * unit - 4) / 2, y0 + (h * unit - 4) / 2, text=label, font=font, fill="#1c2430")
+            text = c.create_text(x0 + (w * unit - 4) / 2, y0 + (h * unit - 4) / 2, text=label, font=font,
+                                 fill="#1c2430")
             if key_id is not None:
                 self._items[key_id] = rect
+                self._texts[key_id] = text
+                for item in (rect, text):
+                    c.tag_bind(item, "<Button-3>", lambda e, k=key_id: self._toggle_absent(k))
                 self._paint(key_id)
         self._update_info()
 
@@ -249,24 +291,43 @@ class KeyboardStep(Step):
             return
         if key_id in self.down_now:
             color = self.COLOR_DOWN
+        elif key_id in self._stuck_ids:
+            color = self.COLOR_STUCK      # залипшая остаётся красной, даже если «нажималась»
         elif key_id in self.pressed:
             color = self.COLOR_DONE
-        elif key_id in getattr(self, "_stuck_ids", ()):
-            color = self.COLOR_STUCK
+        elif key_id in self.absent:
+            color = self.COLOR_NA
         else:
             color = self.COLOR_IDLE
         self.canvas.itemconfigure(rect, fill=color)
+        self.canvas.itemconfigure(self._texts[key_id],
+                                  fill="#9aa5b5" if color == self.COLOR_NA else "#1c2430")
+
+    def _toggle_absent(self, key_id):
+        if key_id in self.pressed:
+            return
+        self.absent.symmetric_difference_update({key_id})
+        self._paint(key_id)
+        self._update_info()
+
+    def _counts(self) -> tuple[int, int]:
+        """(нажато, всего) без учёта клавиш, отмеченных как отсутствующие."""
+        keys = [k for k in self._items if k not in self.absent]
+        return sum(1 for k in keys if k in self.pressed), len(keys)
 
     def _update_info(self):
         if not self._hook.active:
             return
-        total = len(self._items)
-        done = sum(1 for k in self._items if k in self.pressed)
+        if self._hook.paused:
+            self.info.configure(text="Перехват приостановлен: ввод комментария. Чтобы продолжить тест, "
+                                     "кликните по схеме клавиатуры.")
+            return
+        done, total = self._counts()
         text = f"Проверено клавиш: {done} из {total}"
-        last = getattr(self, "_last", None)
-        if last is not None:
-            labels = {key_id: label for label, key_id, *_ in self._layout()}
-            name = labels.get(last) or _VK_NAMES.get(last) or (f"VK 0x{last:02X}" if isinstance(last, int) else last)
+        if self._last is not None:
+            labels = {key_id: key_name(key_id, label) for label, key_id, *_ in self._layout()}
+            name = labels.get(self._last) or _VK_NAMES.get(self._last) or (
+                f"VK 0x{self._last:02X}" if isinstance(self._last, int) else self._last)
             text += f"   ·   последняя: {name}"
         if not self.block_var.get():
             text += "   ·   перехват системных клавиш выключен"
@@ -279,6 +340,7 @@ class KeyboardStep(Step):
 
     def _reset(self):
         self.pressed.clear()
+        self.absent.clear()
         self.other_keys.clear()
         self._last = None
         for key in self.touch:
@@ -294,16 +356,19 @@ class KeyboardStep(Step):
 
     # --- результаты -------------------------------------------------------
     def _missing(self) -> list[str]:
-        return [label for label, key_id, *_ in self._layout() if key_id is not None and key_id not in self.pressed]
+        return [key_name(key_id, label) for label, key_id, *_ in self._layout()
+                if key_id is not None and key_id not in self.pressed and key_id not in self.absent]
 
     def collect(self):
         layout = self._layout()
+        keys = [k[1] for k in layout if k[1] is not None and k[1] not in self.absent]
         return {
             "layout": "ISO" if self.iso_var.get() else "ANSI",
             "numpad": self.numpad_var.get(),
-            "keys_total": sum(1 for k in layout if k[1] is not None),
-            "keys_pressed": sum(1 for k in layout if k[1] is not None and k[1] in self.pressed),
+            "keys_total": len(keys),
+            "keys_pressed": sum(1 for k in keys if k in self.pressed),
             "keys_not_pressed": self._missing(),
+            "keys_marked_absent": [key_name(k[1], k[0]) for k in layout if k[1] in self.absent],
             "other_keys_pressed": sorted(self.other_keys),
             "stuck_keys": self.stuck,
             "touchpad": dict(self.touch),

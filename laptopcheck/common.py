@@ -68,6 +68,12 @@ _PS_PRELUDE = (
     "$ErrorActionPreference='SilentlyContinue';"
     "$ProgressPreference='SilentlyContinue';"
     "[Console]::OutputEncoding=[System.Text.Encoding]::UTF8;\n"
+    # Out-J: JSON только из ASCII-символов (кириллица -> \uXXXX). Так результат не зависит
+    # от кодовой страницы консоли, даже если строка выше не сработала.
+    "function Out-J { param([Parameter(ValueFromPipeline=$true)]$o) process {"
+    " $j = $o | ConvertTo-Json -Depth 6 -Compress;"
+    r" try { [regex]::Replace($j, '[^\x00-\x7F]', { param($m) '\u{0:x4}' -f [int][char]$m.Value }) }"
+    " catch { $j } } }\n"
 )
 
 

@@ -2,13 +2,15 @@
 
 from __future__ import annotations
 
+import json
 import os
 import sys
 import tkinter as tk
 import webbrowser
-from tkinter import messagebox, ttk
+from pathlib import Path
+from tkinter import filedialog, messagebox, ttk
 
-from ..common import DEFECT, PASSED
+from ..common import DEFECT, PASSED, reports_dir
 from ..report import save_report
 from .base import Step
 
@@ -40,7 +42,7 @@ class InspectionStep(Step):
         form.pack(fill="x", pady=10)
         form.columnconfigure(1, weight=1)
         self.employee = tk.StringVar()
-        self.it = tk.StringVar()
+        self.it = tk.StringVar(value=self._load_it_name())
         ttk.Label(form, text="ФИО сдающего сотрудника:").grid(row=0, column=0, sticky="w", pady=3)
         ttk.Entry(form, textvariable=self.employee).grid(row=0, column=1, sticky="ew", padx=(8, 0))
         ttk.Label(form, text="ФИО принимающего IT-специалиста:").grid(row=1, column=0, sticky="w", pady=3)
@@ -69,6 +71,10 @@ class InspectionStep(Step):
         if not parties["employee"] or not parties["it"]:
             messagebox.showwarning("Акт приёмки", "Укажите ФИО сдающего сотрудника и принимающего IT-специалиста.")
             return
+        if self.app.passport_busy() and not messagebox.askyesno(
+                "Акт приёмки", "Паспорт устройства ещё собирается (этап 1) — часть данных не попадёт в акт.\n\n"
+                "Лучше подождать несколько секунд. Сформировать акт прямо сейчас?"):
+            return
         pending = self.app.pending_titles()
         if pending and not messagebox.askyesno(
                 "Акт приёмки", "Не по всем этапам принято решение:\n\n• " + "\n• ".join(pending)
@@ -81,14 +87,41 @@ class InspectionStep(Step):
         try:
             html_path, json_path = save_report(record)
         except OSError as exc:
-            # Типичная причина — флешка извлечена после теста USB или защищена от записи
-            messagebox.showerror("Акт приёмки", "Не удалось сохранить отчёт в папку Reports:\n"
-                                 f"{exc}\n\nПроверьте, что флешка подключена и доступна для записи, "
-                                 "и нажмите кнопку ещё раз.")
-            return
+            # Типичная причина — флешка извлечена после теста USB, сменила букву или защищена от записи
+            if not messagebox.askyesno(
+                    "Акт приёмки", f"Не удалось сохранить отчёт в папку Reports:\n{exc}\n\n"
+                    "Проверьте, что флешка подключена, и нажмите кнопку ещё раз.\n\n"
+                    "Либо выбрать другую папку для сохранения прямо сейчас?"):
+                return
+            folder = filedialog.askdirectory(title="Папка для акта приёмки")
+            if not folder:
+                return
+            try:
+                html_path, json_path = save_report(record, Path(folder))
+            except OSError as exc2:
+                messagebox.showerror("Акт приёмки", f"Не удалось сохранить отчёт:\n{exc2}")
+                return
+        self._save_it_name(parties["it"])
         self.last_report = html_path
         self.result.configure(text=f"Акт сохранён:\n{html_path}\n{json_path}")
         self.open_btn.pack(side="left", padx=10)
+
+    # --- ФИО IT-специалиста запоминается между запусками (файл лежит в той же папке Reports) ---
+    @staticmethod
+    def _settings_path() -> Path:
+        return reports_dir() / "LaptopCheck_settings.json"
+
+    def _load_it_name(self) -> str:
+        try:
+            return str(json.loads(self._settings_path().read_text(encoding="utf-8")).get("it_name", ""))
+        except (OSError, ValueError, AttributeError):
+            return ""
+
+    def _save_it_name(self, name: str) -> None:
+        try:
+            self._settings_path().write_text(json.dumps({"it_name": name}, ensure_ascii=False), encoding="utf-8")
+        except OSError:
+            pass   # не критично: просто не запомним
 
     def open_report(self):
         if not self.last_report:

@@ -22,7 +22,7 @@ $ports = @(Get-PnpDevice -PresentOnly -Class DiskDrive | Where-Object { $_.Insta
         if ($lp) { "$($lp[0])" }
     }
 })
-@{ ports = $ports } | ConvertTo-Json -Compress
+@{ ports = $ports } | Out-J
 """
 
 _PS_WIRELESS = r"""
@@ -31,10 +31,10 @@ $wifi = @(Get-NetAdapter -Physical | Where-Object {
     } | ForEach-Object { @{ name = "$($_.InterfaceDescription)"; status = "$($_.Status)" } })
 $bt = @(Get-PnpDevice -Class Bluetooth -PresentOnly | Where-Object { $_.InstanceId -notlike 'BTH*' } |
     ForEach-Object { @{ name = "$($_.FriendlyName)"; status = "$($_.Status)" } })
-@{ wifi = $wifi; bluetooth = $bt } | ConvertTo-Json -Depth 4 -Compress
+@{ wifi = $wifi; bluetooth = $bt } | Out-J
 """
 
-_WIFI_STATUS = {"Up": ("включён, подключён к сети", "ok"), "Disconnected": ("включён, сеть не подключена", "ok"),
+_WIFI_STATUS = {"Up": ("работает, подключён к сети", "ok"), "Disconnected": ("работает, сеть не подключена", "ok"),
                 "Disabled": ("ОТКЛЮЧЁН в системе", "warn"), "Not Present": ("не обнаружен", "bad")}
 
 
@@ -82,6 +82,7 @@ class PortsStep(Step):
         self._drives: set[str] | None = None
         self._queue: queue.Queue = queue.Queue()
         self._wireless_busy = False
+        self._initial_port_done = False
 
         # --- Питание -------------------------------------------------------
         ac = ttk.LabelFrame(body, text="Зарядка", padding=12)
@@ -115,6 +116,10 @@ class PortsStep(Step):
     def on_show(self):
         self._drives = removable_drives()
         self._update_usb_label()
+        if not self._initial_port_done and IS_WINDOWS:
+            # Порт, в котором флешка стоит прямо сейчас, тоже считается проверенным
+            self._initial_port_done = True
+            threading.Thread(target=self._resolve_ports, args=(0.0,), daemon=True, name="usb-ports").start()
         if self.wireless is None:
             self._query_wireless()
         self._tick()
@@ -167,9 +172,9 @@ class PortsStep(Step):
         self.later(500, self._tick)
 
     # --- USB ------------------------------------------------------------------
-    def _resolve_ports(self):
+    def _resolve_ports(self, delay: float = 1.0):
         try:
-            time.sleep(1.0)  # даём Windows закончить установку устройства
+            time.sleep(delay)  # даём Windows закончить установку устройства
             data = run_powershell_json(_PS_USB_PORTS, timeout=30)
             self._queue.put(("ports", [p for p in as_list(data.get("ports")) if p]))
         except Exception:
@@ -179,7 +184,7 @@ class PortsStep(Step):
         self.usb_big.configure(text=str(len(self.usb_ports) or self.usb_events))
         text = f"Подключений накопителя зафиксировано: {self.usb_events}"
         if self.usb_ports:
-            text += f"\nРазных физических портов проверено: {len(self.usb_ports)}"
+            text += f"\nРазных физических портов проверено: {len(self.usb_ports)} (включая исходный)"
         text += f"\nСъёмных накопителей сейчас подключено: {len(self._drives or ())}"
         self.usb_info.configure(text=text)
 

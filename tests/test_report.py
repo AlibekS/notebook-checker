@@ -12,7 +12,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from laptopcheck import report, sysinfo  # noqa: E402
-from laptopcheck.steps.keyboard import build_layout, normalize_key  # noqa: E402
+from laptopcheck.steps.keyboard import build_layout, key_name, normalize_key  # noqa: E402
 
 PASSPORT = {
     "identity": {"manufacturer": "Dell Inc.", "model": "Latitude 5420", "serial": "ABC/12:3",
@@ -57,7 +57,22 @@ class PassportTests(unittest.TestCase):
                                    "identity": {"ram_modules": "мусор"}})
 
 
+    def test_placeholder_serial_is_flagged(self):
+        for serial in ("To be filled by O.E.M.", "Default string", "0000000", ""):
+            rows = sysinfo.passport_sections({"identity": {"serial": serial}})[0][1]
+            row = next(r for r in rows if r[0].startswith("Серийный номер"))
+            self.assertEqual(row[2], "warn", serial)
+        rows = sysinfo.passport_sections({"identity": {"serial": "PF2ABCDE"}})[0][1]
+        self.assertEqual(next(r for r in rows if r[0].startswith("Серийный номер"))[2], "")
+
+
 class KeyboardTests(unittest.TestCase):
+    def test_key_names_are_unambiguous(self):
+        names = [key_name(k[1], k[0]) for k in build_layout(True, True) if k[1] is not None]
+        self.assertEqual(len(names), len(set(names)))
+        self.assertEqual(key_name(0xA3, "Ctrl"), "Правый Ctrl")
+        self.assertEqual(key_name(0x65, "5"), "Num 5")
+
     def test_layout_ids_unique(self):
         for iso in (False, True):
             ids = [k[1] for k in build_layout(iso, True) if k[1] is not None]
